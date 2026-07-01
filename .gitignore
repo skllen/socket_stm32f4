@@ -1,0 +1,30 @@
+# ========== MDK-ARM 编译产物 ==========
+MDK-ARM/**/Listings/
+MDK-ARM/**/Objects/
+MDK-ARM/**/*.crf
+MDK-ARM/**/*.d
+MDK-ARM/**/*.o
+MDK-ARM/**/*.dep
+MDK-ARM/**/*.lnp
+MDK-ARM/**/*.map
+MDK-ARM/**/*.htm
+MDK-ARM/**/*.iex
+MDK-ARM/**/*.sct
+MDK-ARM/**/*.build_log.htm
+
+# ========== CubeMX 备份 ==========
+*.bak
+*.swp
+*.swo
+
+# ========== Windows 系统文件 ==========
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ========== IDE 临时文件 ==========
+.idea/
+.vscode/
+*.suo
+*.user
+*.aps
