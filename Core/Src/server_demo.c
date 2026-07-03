@@ -27,50 +27,51 @@ typedef struct
  * 每个客户端一个任务：
  * 负责 recv 数据，然后 send 回显。
  */
-static void esp8266_client_echo_task(void *argument)
-{
-    esp8266_client_arg_t *arg;
-    int client_socket_fd;
-    uint8_t recv_buf[ESP8266_RECV_BUF_SIZE];
-    int len;
-    struct UART_Device *puart = Get_UART_Device("stm32_f4_uart1");
-    
-    arg = (esp8266_client_arg_t *)argument;
-    client_socket_fd = arg->client_fd;
+//static void esp8266_client_echo_task(void *argument)
+//{
+//    esp8266_client_arg_t *arg;
+//		int err;
+//    int client_socket_fd;
+//    uint8_t recv_buf[ESP8266_RECV_BUF_SIZE];
+//    int len;
+//    struct UART_Device *puart = Get_UART_Device("stm32_f4_uart1");
+//    
+//    arg = (esp8266_client_arg_t *)argument;
+//    client_socket_fd = arg->client_fd;
 
-    vPortFree(arg);
+//    vPortFree(arg);
 
-    while (1)
-    {
-        len = esp8266_recv(client_socket_fd,
-                           recv_buf,
-                           sizeof(recv_buf),
-                           0);
+//    while (1)
+//    {
+//        len = esp8266_recv(client_socket_fd,
+//                           recv_buf,
+//                           sizeof(recv_buf),
+//                           0);
 
-        if (len > 0)
-        {
+//        if (len > 0)
+//        {
 
-            esp8266_send(client_socket_fd,
-                         recv_buf,
-                         len,
-                         0);
-        }
-        else
-        {
-            /*
-             * len == 0：客户端关闭
-             * len < 0 ：接收出错
-             */
-            //break;
-        }
+//            esp8266_send(client_socket_fd,
+//                         recv_buf,
+//                         len,
+//                         0);
+//        }
+//        else
+//        {
+//            /*
+//             * len == 0：客户端关闭
+//             * len < 0 ：接收出错
+//             */
+//            //break;
+//        }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
+//        vTaskDelay(pdMS_TO_TICKS(10));
+//    }
 
-    esp8266_close(client_socket_fd);
+//    err = esp8266_close(client_socket_fd);
 
-    vTaskDelete(NULL);
-}
+//    vTaskDelete(NULL);
+//}
 
 
 /*

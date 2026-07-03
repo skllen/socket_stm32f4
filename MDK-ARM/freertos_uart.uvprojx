@@ -189,7 +189,7 @@
             <hadIRAM2>1</hadIRAM2>
             <hadIROM2>0</hadIROM2>
             <StupSel>8</StupSel>
-            <useUlib>0</useUlib>
+            <useUlib>1</useUlib>
             <EndSel>0</EndSel>
             <uLtcg>0</uLtcg>
             <nSecure>0</nSecure>
@@ -339,7 +339,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Lib;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Middlewares/Third_Party/at_socket;../Drivers/DshanMCU_Driver</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Lib;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/DshanMCU_Driver;..\Middlewares\Third_Party\socket;..\Middlewares\Third_Party\paho_mqtt\MQTTClient-C\src\FreeRTOS;..\Middlewares\Third_Party\paho_mqtt\MQTTClient-C\src;..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -397,11 +397,6 @@
               <FileName>uart_device.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\uart_device.c</FilePath>
-            </File>
-            <File>
-              <FileName>esp8266.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\esp8266.c</FilePath>
             </File>
             <File>
               <FileName>main.c</FileName>
@@ -755,14 +750,14 @@
               </FileOption>
             </File>
             <File>
-              <FileName>device_socket.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\device_socket.c</FilePath>
-            </File>
-            <File>
               <FileName>server_demo.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\server_demo.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqttclient_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\mqttclient_test.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -1721,19 +1716,89 @@
         </Group>
         <Group>
           <GroupName>Middlewares/at_socket</GroupName>
+          <Files>
+            <File>
+              <FileName>at_device.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\socket\at_device.c</FilePath>
+            </File>
+            <File>
+              <FileName>device_socket.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\socket\device_socket.c</FilePath>
+            </File>
+            <File>
+              <FileName>esp8266.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\socket\esp8266.c</FilePath>
+            </File>
+          </Files>
         </Group>
         <Group>
           <GroupName>Driver</GroupName>
+        </Group>
+        <Group>
+          <GroupName>Middleware/paho_mqtt</GroupName>
           <Files>
             <File>
-              <FileName>chinese_font.c</FileName>
+              <FileName>MQTTConnectClient.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Drivers\DshanMCU_Driver\chinese_font.c</FilePath>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTConnectClient.c</FilePath>
             </File>
             <File>
-              <FileName>driver_oled.c</FileName>
+              <FileName>MQTTConnectServer.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Drivers\DshanMCU_Driver\driver_oled.c</FilePath>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTConnectServer.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTDeserializePublish.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTDeserializePublish.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTFormat.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTFormat.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTPacket.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTPacket.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTSerializePublish.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTSerializePublish.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTSubscribeClient.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTSubscribeClient.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTSubscribeServer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTSubscribeServer.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTUnsubscribeClient.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTUnsubscribeClient.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTUnsubscribeServer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src\MQTTUnsubscribeServer.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTClient.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTClient-C\src\MQTTClient.c</FilePath>
+            </File>
+            <File>
+              <FileName>MQTTFreeRTOS.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Middlewares\Third_Party\paho_mqtt\MQTTClient-C\src\FreeRTOS\MQTTFreeRTOS.c</FilePath>
             </File>
           </Files>
         </Group>

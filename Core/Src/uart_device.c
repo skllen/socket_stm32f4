@@ -7,7 +7,7 @@
 #include "queue.h"
 #include "uart_device.h"
 #include "string.h"
-#include "stdio.h"
+#include <stdio.h>
 /* USER CODE END 0 */
 
 
@@ -15,8 +15,8 @@
 #define STM32_UART1_RX_DMA_BUFFER   512
 #define STM32_UART1_TX_UXITEMSIZE   1
 
-#define STM32_UART2_RX_QUEUE_LENGTH 512
-#define STM32_UART2_RX_DMA_BUFFER   512
+#define STM32_UART2_RX_QUEUE_LENGTH 1024
+#define STM32_UART2_RX_DMA_BUFFER   1024
 #define STM32_UART2_TX_UXITEMSIZE   1
 
 typedef struct UART_Data{
@@ -137,6 +137,7 @@ static int stm32_uart_flush(struct UART_Device *pDev)
   while(pdTRUE == xQueueReceive( pdata->QueueHandle_rx_queue,
                           &data,
                           0 ));
+	return 0;
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -200,16 +201,30 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 	//	}
 }
 
-//int fputc(int ch, FILE *f)
-//{
-//	uart2_stm32f4_hal.UART_Send(&uart2_stm32f4_hal, (uint8_t *)&ch, 1, portMAX_DELAY);
-//    return ch;
-//}
-// 
-// int fgetc(FILE *f) 
-// {
-//    int ch;
-//    //数据接收
-//    uart2_stm32f4_hal.UART_Receive(&uart2_stm32f4_hal, (uint8_t *)&ch, 1, portMAX_DELAY);
-//    return ch;
-// }
+int fputc(int ch, FILE* stream)
+{
+	HAL_UART_Transmit(&huart1, (const uint8_t *)&ch, 1, 10);
+	//uart1_stm32f4_hal.UART_Send(&uart1_stm32f4_hal, (uint8_t *)&ch, 1, 10);
+	return ch;
+}
+
+static int g_last_char;
+static int g_backspace = 0;
+int fgetc(FILE *f)
+{
+	int ch;
+	if (g_backspace)
+	{
+		g_backspace = 0;
+		return g_last_char;
+	}
+	while(0 != uart1_stm32f4_hal.UART_Recv(&uart1_stm32f4_hal, (uint8_t *)&ch,0));
+	g_last_char = ch;
+	return ch;
+}
+
+int __backspace(FILE *stream)
+{
+	g_backspace = 1;
+	return 0;
+}

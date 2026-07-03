@@ -26,6 +26,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "uart_device.h"
+#include "mqttclient_test.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,7 +63,7 @@ extern void tcp_client_test_task(void *arg);
 #define TCP_CLIENT_TASK_STACK_SIZE   512        /* 单位是字（word），不是字节 */
 #define TCP_CLIENT_TASK_PRIORITY     (osPriorityNormal)
 
-static TaskHandle_t s_tcp_client_handle = NULL;
+//static TaskHandle_t s_tcp_client_handle = NULL;
 
 /* USER CODE END FunctionPrototypes */
 
@@ -128,9 +129,7 @@ void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
 
-  uint8_t data;
 //  PUART_Device uart = Get_UART_Device("stm32_f4_uart2");
-//    PUART_Device uart1 = Get_UART_Device("stm32_f4_uart1");
 //  if (uart == NULL)
 //  {
 //    while(1)
@@ -139,14 +138,18 @@ void StartDefaultTask(void *argument)
 //    }
 //  }
 //  uart->UART_Init(uart, 115200, 8, 'N', 1);
-//  uart1->UART_Init(uart1, 115200, 8, 'N', 1);
 //  process_cmd_task();
-    extern int esp8266_wifi_connect(char *ssid, char *password);
-  esp8266_wifi_connect("Tenda", "wxw123456");
+		//esp8266_wifi_connect("Tenda", "wxw123456");
+	MQTTClientTask(NULL);
+  //   extern int esp8266_wifi_connect(char *ssid, char *password);
+  // esp8266_wifi_connect("Tenda", "wxw123456");
   /* Infinite loop */
   for(;;)
   {
-
+		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_RESET);	
+    vTaskDelay(500);
+    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_SET);	
+    vTaskDelay(500);
 //    if(0 == uart1->UART_Recv(uart1, &data, 1))
 //    {
 //       uart1->UART_Send(uart1, &data, 1, 1);

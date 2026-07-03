@@ -1,5 +1,5 @@
-#ifndef __ESP8266_H__
-#define __ESP8266_H__
+#ifndef __AT_DEVICE_H__
+#define __AT_DEVICE_H__
 
 #ifdef __cplusplus
 extern "C" {
@@ -11,18 +11,17 @@ extern "C" {
 #include "semphr.h"
 #include "queue.h"
 #include "device_socket.h"
-/* ==================== ESP8266-01S Socket 管理 ==================== */
-#define ESP8266_SOCKET_NUM  (5)   /* socket 0 ~ 4，4个客户端socket_t/ 一个作为服务器socket_t*/
 
-#define ESP8266_SOCKET_SERVER_ID 0xa55aa55a
-#define ESP8266_SOCKET_RX_QUEUE_SIZE 100
-#define ESP8266_SOCKET_RX_SEMAPHORE_COUNT 10
-#define ESP8266_SOCKET_ACCEPT_QUEUE_SIZE 20
+#define SO_RCVTIMEO 0
+#define SO_SNDTIMEO 1
 
 #define RESP_ROW_LEN  10   /* 每行最大字节数 */
 #define RESP_COL_LEN  256    /* 最多缓存行数   */
-#define ESP8266_RESP_LINE_MAX   RESP_ROW_LEN   /* 最多缓存行数 */
+// #define AF_INET		2	/* Internet IP Protocol 	*/
+// #define PF_INET		AF_INET
 
+#define AT_PARSER_TASK_STACK_SIZE 512
+typedef uint32_t socklen_t;
 struct AT_Device {
     int resp_status; // 0:成功 1:失败 2:超时
     uint8_t resp[RESP_ROW_LEN][RESP_COL_LEN];/*存储接收的每行数据用/0结尾*/
@@ -31,28 +30,17 @@ struct AT_Device {
     xSemaphoreHandle dev_lock;
     xSemaphoreHandle send_lock;   /* 发送互斥锁 */
     xSemaphoreHandle at_resp_sem;   /* 回应通知信号量 */
-    xSemaphoreHandle prompt_sem;   /* 数据通知信号量 */
-    struct socket_t sockets[ESP8266_SOCKET_NUM];
+    // xSemaphoreHandle prompt_sem;   /* 数据通知信号量 */
+    struct socket_t *sockets;
     struct UART_Device *puart;
     uint32_t local_ip; /*网络字节序，0表示未获取*/
 };
 
-int    esp8266_socket(int domain, int type, int protocol);
-int    esp8266_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
-int    esp8266_close(int sockfd);
-int esp8266_bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen);
-int    esp8266_listen(int sockfd, int backlog);
-int    esp8266_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
-int    esp8266_send(int sockfd, const void *buf, size_t len, int flags);
-ssize_t esp8266_recv(int sockfd, void *buf, size_t len, int flags);
-ssize_t esp8266_sendto(int sockfd, const void *buf, size_t len, int flags,
-                       const struct sockaddr *dest_addr, socklen_t addrlen);
-ssize_t esp8266_recvfrom(int sockfd, void *buf, size_t len, int flags,
-                         struct sockaddr *src_addr, socklen_t *addrlen);
 int    at_send_cmd(struct AT_Device *ptDev, char *cmd, uint8_t *resp,
                    uint32_t *resp_len, uint32_t max_len, uint32_t timeout_ms);
 int    at_send_data(struct AT_Device *pdev, const uint8_t *data,
                     uint32_t len, uint32_t timeout);
+void at_reset_resp(struct AT_Device * ptDev);
 
 ///* ==================== Socket 管理接口 ==================== */
 //int  esp8266_socket_init(void);                                /* 初始化 socket 池 */
