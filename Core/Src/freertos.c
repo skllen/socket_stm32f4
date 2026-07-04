@@ -52,7 +52,7 @@
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 128 * 5,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 
@@ -139,16 +139,20 @@ void StartDefaultTask(void *argument)
 //  }
 //  uart->UART_Init(uart, 115200, 8, 'N', 1);
 //  process_cmd_task();
+//extern void flash_test_run(void);
+//flash_test_run();
+		extern void start_webserver(void);
+    start_webserver();  
 		//esp8266_wifi_connect("Tenda", "wxw123456");
-	MQTTClientTask(NULL);
+	//MQTTClientTask(NULL);
   //   extern int esp8266_wifi_connect(char *ssid, char *password);
   // esp8266_wifi_connect("Tenda", "wxw123456");
   /* Infinite loop */
   for(;;)
   {
-		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_RESET);	
-    vTaskDelay(500);
-    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_SET);	
+//		HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_RESET);	
+//    vTaskDelay(500);
+//    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_SET);	
     vTaskDelay(500);
 //    if(0 == uart1->UART_Recv(uart1, &data, 1))
 //    {

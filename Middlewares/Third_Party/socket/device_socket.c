@@ -30,8 +30,6 @@ int fd_socket_alloc(struct socket_t *pdev)
         if (g_fd_table[i] == NULL)
         {
             g_fd_table[i] = pdev;
-            g_fd_table[i]->open_flag = 1;
-            g_fd_table[i]->sockfd = i;
             ret = i;
             break;
         }
@@ -47,8 +45,6 @@ int fd_socket_free(int fd)
         return -1;
     }
 	printf("fd_socket_free fd %d\r\n",fd);
-    g_fd_table[fd]->open_flag = 0;
-    g_fd_table[fd]->sockfd = -1;
     g_fd_table[fd] = NULL;
     return 0;
 }
@@ -94,7 +90,10 @@ uint16_t htons(uint16_t hostshort)
 {
     return (uint16_t)((hostshort << 8) | (hostshort >> 8));
 }
-
+uint32_t htonl(uint32_t iplong)
+{
+    return (uint32_t)(((iplong>>24)&0xFF) | ((iplong>>8)&0xFF00) | ((iplong<<8)&0xFF0000) | ((iplong<<24)&0xFF000000));
+}
 /**********************************************************************
  * 函数名称： at_init
  * 功能描述： 初始化W800相关结构体
@@ -110,17 +109,6 @@ int at_init(char *uart_dev)
 	return esp8266_init(uart_dev);
 }
 
-/**********************************************************************
- * 函数名称： at_connect_ap
- * 功能描述： 连接WIFI AP
- * 输入参数： ssid   - AP名称
- *            passwd - 密码
- * 输出参数： 无
- * 返 回 值： 0-成功, (-1)-失败
- * 修改日期：	版本号	  修改人 	  修改内容
- * -----------------------------------------------
- * 2024/09/04		 V1.0	  韦东山 	  创建
- ***********************************************************************/
 int at_connect_ap(char *ssid, char *passwd)
 {
 	return esp8266_connect_ap(ssid, passwd);

@@ -339,7 +339,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Lib;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/DshanMCU_Driver;..\Middlewares\Third_Party\socket;..\Middlewares\Third_Party\paho_mqtt\MQTTClient-C\src\FreeRTOS;..\Middlewares\Third_Party\paho_mqtt\MQTTClient-C\src;..\Middlewares\Third_Party\paho_mqtt\MQTTPacket\src</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Lib;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/DshanMCU_Driver;../Middlewares/Third_Party/socket;../Middlewares/Third_Party/paho_mqtt/MQTTClient-C/src/FreeRTOS;../Middlewares/Third_Party/paho_mqtt/MQTTClient-C/src;../Middlewares/Third_Party/paho_mqtt/MQTTPacket/src</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -397,6 +397,16 @@
               <FileName>uart_device.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\uart_device.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqttclient_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\mqttclient_test.c</FilePath>
+            </File>
+            <File>
+              <FileName>webserver.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\webserver.c</FilePath>
             </File>
             <File>
               <FileName>main.c</FileName>
@@ -750,14 +760,14 @@
               </FileOption>
             </File>
             <File>
-              <FileName>server_demo.c</FileName>
+              <FileName>stm_flsh.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\server_demo.c</FilePath>
+              <FilePath>..\Core\Src\stm_flsh.c</FilePath>
             </File>
             <File>
-              <FileName>mqttclient_test.c</FileName>
+              <FileName>ee_config.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\mqttclient_test.c</FilePath>
+              <FilePath>..\Core\Src\ee_config.c</FilePath>
             </File>
           </Files>
         </Group>

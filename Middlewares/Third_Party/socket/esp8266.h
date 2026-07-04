@@ -17,17 +17,6 @@ extern "C" {
 
 struct AT_Device * get_netdev(void);
 int esp8266_init(char *uart_dev);
-/**********************************************************************
- * 函数名称： w800_connect_ap
- * 功能描述： 连接WIFI AP
- * 输入参数： ssid   - AP名称
- *            passwd - 密码
- * 输出参数： 无
- * 返 回 值： 0-成功, (-1)-失败
- * 修改日期：	版本号	  修改人 	  修改内容
- * -----------------------------------------------
- * 2024/09/01		 V1.0	  韦东山 	  创建
- ***********************************************************************/
 int esp8266_connect_ap(char *ssid, char *passwd);
 int esp8266_setsockopt(int socket, int level, int optname, const void *optval, socklen_t optlen);
 uint32_t esp8266_gethostbyname(char *addr);

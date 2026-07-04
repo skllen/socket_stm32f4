@@ -93,6 +93,8 @@ int inet_pton(int af, const char *src, void *dst);
     /* 网络字节序转主机字节序 */
 uint16_t ntohs(uint16_t netshort);
 uint16_t htons(uint16_t hostshort); 
+uint32_t htonl(uint32_t iplong);
+
 
 int at_socket(int domain, int type, int protocol);
 int at_closesocket(int socket);

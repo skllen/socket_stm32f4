@@ -31,9 +31,10 @@ struct AT_Device {
     xSemaphoreHandle send_lock;   /* 发送互斥锁 */
     xSemaphoreHandle at_resp_sem;   /* 回应通知信号量 */
     // xSemaphoreHandle prompt_sem;   /* 数据通知信号量 */
-    struct socket_t *sockets;
+    struct socket_t sockets[5];
     struct UART_Device *puart;
     uint32_t local_ip; /*网络字节序，0表示未获取*/
+    int in_cmd;
 };
 
 int    at_send_cmd(struct AT_Device *ptDev, char *cmd, uint8_t *resp,

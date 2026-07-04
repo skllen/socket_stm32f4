@@ -6,7 +6,7 @@
 
 void at_reset_resp(struct AT_Device * ptDev)
 {
-    memset(ptDev->resp_line_len,0,RESP_ROW_LEN);
+    memset(ptDev->resp_line_len,0,sizeof(ptDev->resp_line_len));
     //
     ptDev->resp_line_counts = 0;
     ptDev->resp_status = 0;
@@ -43,11 +43,8 @@ int at_send_cmd(struct AT_Device *ptDev , char *cmd, uint8_t *resp, uint32_t *re
 	uint32_t i;
     int ret = -1;
     xSemaphoreTake(ptDev->send_lock, portMAX_DELAY);
-
-    ptDev->resp_line_counts = 0;
-    ptDev->resp_status = 0;
-    memset(ptDev->resp_line_len, 0, sizeof(ptDev->resp_line_len));
-    //xSemaphoreTake(ptDev->at_resp_sem, 0);
+    at_reset_resp(ptDev);
+    ptDev->in_cmd = 1;
     puart->UART_Send(puart, (uint8_t *)cmd, strlen(cmd), timeout_ms);
     // puart->UART_Send(puart, (const uint8_t *)"\r\n", 2);
 
@@ -76,7 +73,6 @@ int at_send_cmd(struct AT_Device *ptDev , char *cmd, uint8_t *resp, uint32_t *re
         //
         ret = ptDev->resp_status;
     }
-
     xSemaphoreGive(ptDev->send_lock);
     return ret;
 }

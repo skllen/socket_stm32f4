@@ -15,8 +15,8 @@
 #define STM32_UART1_RX_DMA_BUFFER   512
 #define STM32_UART1_TX_UXITEMSIZE   1
 
-#define STM32_UART2_RX_QUEUE_LENGTH 1024
-#define STM32_UART2_RX_DMA_BUFFER   1024
+#define STM32_UART2_RX_QUEUE_LENGTH 512
+#define STM32_UART2_RX_DMA_BUFFER   512
 #define STM32_UART2_TX_UXITEMSIZE   1
 
 typedef struct UART_Data{
@@ -168,24 +168,24 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 	if (g_uart1_data.huart == huart)
 	{
 		pdata = &g_uart1_data;
-			for (int i = pdata->r; i < Size; i++)
-	{
-		xQueueSendFromISR(
-			pdata->QueueHandle_rx_queue,
-			&g_uart1_recv_dma_buff[i],
-			0);
-	}
+		for (int i = pdata->r; i < Size; i++)
+		{
+			xQueueSendFromISR(
+				pdata->QueueHandle_rx_queue,
+				&g_uart1_recv_dma_buff[i],
+				0);
+		}
 	}
 	else if (g_uart2_data.huart == huart)
 	{
 		pdata = &g_uart2_data;
-			for (int i = pdata->r; i < Size; i++)
-	{
-		xQueueSendFromISR(
-			pdata->QueueHandle_rx_queue,
-			&g_uart2_recv_dma_buff[i],
-			0);
-	}
+		for (int i = pdata->r; i < Size; i++)
+		{
+			xQueueSendFromISR(
+				pdata->QueueHandle_rx_queue,
+				&g_uart2_recv_dma_buff[i],
+				0);
+		}
 	}
 
 	pdata->r = Size;

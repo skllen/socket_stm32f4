@@ -13,8 +13,8 @@
 #define ESP8266_TIMEOUT     2
 #define ESP8266_BUSY        3
 
-#define ESP8266_RX_BUF_SIZE         512 /*recv_task 缓冲数组大小*/           
-#define ESP8266_SOCKET_QUEUE_SIZE   256 /*每条socket 队列的大小,单位字节*/
+#define ESP8266_RX_BUF_SIZE         1024 /*recv_task 缓冲数组大小*/           
+#define ESP8266_SOCKET_QUEUE_SIZE   1024 /*每条socket 队列的大小,单位字节*/
 #define RECV_NOTIFILE_COUNTING      10  /*每条socket 接收数据完成信号量通知数量*/
 
 #ifndef AF_INET
@@ -25,18 +25,11 @@
 #define INET_ADDRSTRLEN 16
 #endif
 
-#define RECV_QUEUE_SIZE  512
 #define AT_TIMEOUT 5000
 
 #define ESP8266_SOCKET_NUM  (5)   /* socket 0 ~ 4，4个客户端socket_t/ 一个作为服务器socket_t*/
 #define ESP8266_UART_NAME              "stm32_f4_uart2"
-#define ESP8266_RECV_HDR_SIZE          14
 
-#define ESP8266_RECV_HDR_MAGIC0        'E'
-#define ESP8266_RECV_HDR_MAGIC1        'P'
-#define ESP8266_RECV_HDR_VERSION       1
-
-#define ESP8266_RECV_FLAG_HAS_REMOTE   0x01
 /* CIPSTATUS 解析结果结构 */
 // <link	ID>,<type>,<remote	IP>,<remote	port>,<local port>,<tetype>
 typedef struct {
@@ -70,7 +63,7 @@ typedef struct
 } ESP8266_RecvHeader;
 
 static struct AT_Device g_esp8266ATDevice;
-static struct socket_t g_esp8266_sockets[ESP8266_SOCKET_NUM];
+//static struct socket_t g_esp8266_sockets[ESP8266_SOCKET_NUM];
 
 static TaskHandle_t  g_start_recv_handle;
 void Start_RECV_Task(void *argument);
@@ -279,10 +272,11 @@ int esp8266_init(char *uart_dev)
     struct socket_t  *psocket;
     /*全部清零*/
     memset(pdev, 0, sizeof(struct AT_Device));
-	  pdev->sockets = g_esp8266_sockets;
+	  //pdev->sockets = g_esp8266_sockets;
     pdev->dev_lock = xSemaphoreCreateMutex();
     pdev->send_lock   = xSemaphoreCreateMutex();
     pdev->at_resp_sem = xSemaphoreCreateBinary();
+    pdev->in_cmd = 0;
     if (pdev->dev_lock ==NULL || pdev->send_lock ==NULL || pdev->at_resp_sem ==NULL)
         return -1;
     printf("esp8266_init\r\n");
@@ -328,13 +322,12 @@ void test_socket_tcp_server_task(void)
     socklen_t server_addr_len;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port   = htons(777);
+    server_addr.sin_port   = htons(80);
     inet_pton(AF_INET, "192.168.0.152", &server_addr.sin_addr);
     server_addr_len = sizeof(server_addr);
     esp8266_bind(socket_server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr));
     esp8266_listen(socket_server_fd, 10);
     uint8_t buf[256];
-	int err;
     int data_len;
     int client_fd ;
 		
@@ -367,18 +360,117 @@ void test_socket_tcp_server_task(void)
 		}
 }
 
+#define HTTP_PORT 80
+/*----内嵌页面 ---- */
+static const char HTML_PAGE[] ="HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n"
+    "<!DOCTYPE html><html><head><meta charset='utf-8'><title>LED</title>"
+    "<style>body{font-family:sans-serif;text-align:center;padding:40px}"
+    "button{padding:12px 28px;font-size:1em;margin:8px;border:none;border-radius:8px;cursor:pointer}"
+    "#status{font-size:1.2em;margin:16px}</style></head>"
+    "<body><h2>LED Control</h2>"
+    "<div id='status'>-</div>"
+    "<button style='background:#2ecc71' onclick='ctrl(\"on\")'>ON</button>"
+    "<button style='background:#e74c3c' onclick='ctrl(\"off\")'>OFF</button>"
+    "<script>"
+    "function ctrl(m){"
+    "  fetch('/led',{method:'POST',"
+    "    headers:{'Content-Type':'application/x-www-form-urlencoded'},"
+    "    body:'mode='+m})"
+    "  .then(r=>{if(r.ok)document.getElementById('status').textContent='LED: '+m.toUpperCase();});"
+    "}"
+    "</script></body></html>";
+
+static const char RESP_OK[] =
+    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK";
+
+static const char RESP_400[] =
+    "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nBad Request";
+
+/* ---- 接收完整HTTP请求头 ---- */
+static int recv_request(int fd, char *buf, int buf_size)
+{
+    int total = 0;
+    uint32_t timeout_ms = 3000;
+    setsockopt(fd, 0, SO_RCVTIMEO, &timeout_ms, sizeof(timeout_ms));
+
+    while (total < buf_size - 1) {
+        int n = recv(fd, buf + total, buf_size - 1 - total, 0);
+        if (n > 0) {
+            total += n;
+            buf[total] = '\0';
+            if (strstr(buf, "\r\n\r\n"))
+                return total;   // 头部接收完整
+        } else {
+            break;              // 超时或断开
+        }
+    }
+    return total;
+}
+
+/* ---- 处理一次连接 ---- */
+static void handle_client(int fd)
+{
+    char buf[512];
+    int len = recv_request(fd, buf, sizeof(buf));
+
+    if (len <= 0) {
+        send(fd, RESP_400, strlen(RESP_400), 0);
+        return;
+    }
+
+    if (strncmp(buf, "POST /led", 9) == 0) {
+        char *body = strstr(buf, "\r\n\r\n");
+        if (body) {
+            body += 4;
+            if (strstr(body, "mode=on")) {
+                HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_SET);
+                printf("LED ON\r\n");
+            } else if (strstr(body, "mode=off")) {
+                HAL_GPIO_WritePin(GPIOF, GPIO_PIN_9, GPIO_PIN_RESET);
+                printf("LED OFF\r\n");
+            }
+        }
+        send(fd, RESP_OK, strlen(RESP_OK), 0);
+    } else {
+        send(fd, HTML_PAGE, strlen(HTML_PAGE), 0);
+    }
+}
+
+/* ---- FreeRTOS 任务 ---- */
+void http_server_task(void *arg)
+{
+    struct sockaddr_in addr = {
+        .sin_family      = AF_INET,
+        .sin_port        = htons(HTTP_PORT),
+        .sin_addr.s_addr = 0
+    };
+
+    int srv = socket(AF_INET, SOCK_STREAM, 0);
+    bind(srv, (struct sockaddr *)&addr, sizeof(addr));
+    listen(srv, 5);
+    printf("HTTP server on port %d\r\n", HTTP_PORT);
+
+    for (;;) {
+        int cli = accept(srv, NULL, NULL);
+        if (cli < 0) { vTaskDelay(pdMS_TO_TICKS(200)); continue; }
+
+        handle_client(cli);
+        closesocket(cli);
+    }
+}
+
+
+
 void Client_TCP_Task(void * parm)
 {
+	int len;
 	    char buf[256] = {0};
 	   int sockfd = esp8266_socket(AF_INET,SOCK_STREAM,0);
     struct sockaddr_in server_addr;
-    socklen_t server_addr_len;
-    int len;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port   = htons(1883);
     inet_pton(AF_INET, "192.168.0.152", &server_addr.sin_addr);
-    server_addr_len = sizeof(server_addr);
     esp8266_connect(sockfd,(const struct sockaddr *)&server_addr,sizeof(server_addr));
     while(1)
     {
@@ -388,27 +480,26 @@ void Client_TCP_Task(void * parm)
 					continue;
 
         }
-                   printf("recv:%s\r\n",buf);
-            esp8266_send(sockfd, buf, len, 0);
+        printf("recv:%s\r\n",buf);
+        esp8266_send(sockfd, buf, len, 0);
     }
 }
 
 int esp8266_wifi_connect(char *ssid, char *password)
 {
-    char cmd[128];
     struct AT_Device *pdev = get_netdev();
 
     esp8266_init("stm32_f4_uart2");
 	esp8266_connect_ap(ssid,password);
-//		    xTaskCreate(
-//        test_socket_tcp_server_task,       // 函数指针, 任务函数
-//        "Client_TCP_Task",     // 任务的名字
-//        AT_PARSER_TASK_STACK_SIZE,                   // 栈大小,单位为word,10表示40字节
-//        pdev,                  // 调用任务函数时传入的参数
-//        osPriorityNormal,                     // 优先级
-//        NULL); // 任务句柄, 以后使用它来操作这个任务
-//                               //   err = at_send_cmd(pdev, "AT+RST\r\n", NULL, NULL, 0, 15000);
-//                               //   while (err);
+		    xTaskCreate(
+        http_server_task,       // 函数指针, 任务函数
+        "Client_TCP_Task",     // 任务的名字
+        AT_PARSER_TASK_STACK_SIZE,                   // 栈大小,单位为word,10表示40字节
+        pdev,                  // 调用任务函数时传入的参数
+        osPriorityNormal,                     // 优先级
+        NULL); // 任务句柄, 以后使用它来操作这个任务
+                               //   err = at_send_cmd(pdev, "AT+RST\r\n", NULL, NULL, 0, 15000);
+                               //   while (err);
 
 	// ip = esp8266_gethostbyname("www.baidu.com");
 		
@@ -456,15 +547,13 @@ int esp8266_get_wifi_status(char *ssid_buf, ssize_t ssid_len)
 }
 
 /**********************************************************************
- * 函数名称： w800_connect_ap
+ * 函数名称： esp8266_connect_ap
  * 功能描述： 连接WIFI AP
  * 输入参数： ssid   - AP名称
  *            passwd - 密码
  * 输出参数： 无
  * 返 回 值： 0-成功, (-1)-失败
  * 修改日期：	版本号	  修改人 	  修改内容
- * -----------------------------------------------
- * 2024/09/01		 V1.0	  韦东山 	  创建
  ***********************************************************************/
 int esp8266_connect_ap(char *ssid, char *passwd)
 {
@@ -534,28 +623,23 @@ static int parse_dec_u32(const char **pp, uint32_t *out)
     return 0;
 }
 
-static void esp8266_uart_recv_byte_block(struct UART_Device *puart, uint8_t *data)
-{
-    while (puart->UART_Recv(puart, data, 0) != 0);
-}
 static void esp8266_uart_discard_bytes(struct UART_Device *puart, uint16_t len)
 {
     uint8_t dummy;
-
     while (len--)
-    {
-        esp8266_uart_recv_byte_block(puart, &dummy);
-    }
+        while (puart->UART_Recv(puart, &dummy, portMAX_DELAY) != 0);
 }
 
+/* ------------------------------------------------------------------ */
+/*  解析 +IPD 头部（不变，仅格式整理）                                   */
+/* ------------------------------------------------------------------ */
 static int esp8266_parse_ipd_header(const char *ipd, ESP8266_IPD_Info *info)
 {
     const char *p;
-    uint32_t val;
-
-    char ip_str[46];
+    uint32_t    val;
+    char        ip_str[46];
     const char *ip_start;
-    ssize_t ip_len;
+    ssize_t     ip_len;
 
     if (ipd == NULL || info == NULL)
         return -1;
@@ -568,47 +652,28 @@ static int esp8266_parse_ipd_header(const char *ipd, ESP8266_IPD_Info *info)
     p = ipd + 5;
 
     /* link_id */
-    if (parse_dec_u32(&p, &val) != 0)
+    if (parse_dec_u32(&p, &val) != 0|| val > 4)
         return -3;
-
-    if (val > 4)
-        return -4;
-
     info->link_id = (uint8_t)val;
 
-    if (*p != ',')
+    if (*p++ != ',')
         return -5;
 
-    p++;
-
     /* data_len */
-    if (parse_dec_u32(&p, &val) != 0)
+    if (parse_dec_u32(&p, &val) != 0 || val > 65535)
         return -6;
-
-    if (val > 65535)
-        return -7;
-
     info->data_len = (uint16_t)val;
 
-    /*
-     * 模式 1:
-     * +IPD,<link_id>,<len>:<data>
-     */
+    /* 模式 1: +IPD,<link_id>,<len>:<data> */
     if (*p == ':')
     {
         info->has_remote = 0;
-        info->remote_ip = 0;
-        info->remote_port = 0;
         return 0;
     }
 
-    /*
-     * 模式 2:
-     * +IPD,<link_id>,<len>,<remote_ip>,<remote_port>:<data>
-     */
+    /* 模式 2: +IPD,<link_id>,<len>,<remote_ip>,<remote_port>:<data> */
     if (*p != ',')
         return -8;
-
     p++;
 
     info->has_remote = 1;
@@ -618,435 +683,219 @@ static int esp8266_parse_ipd_header(const char *ipd, ESP8266_IPD_Info *info)
     {
         p++;
         ip_start = p;
-
-        while (*p && *p != '"')
-            p++;
-
-        if (*p != '"')
-            return -9;
-
+        while (*p && *p != '"') p++;
+        if (*p != '"') return -9;
         ip_len = (ssize_t)(p - ip_start);
-        p++;
-
-        if (*p != ',')
-            return -10;
-
-        p++;
-    }
+        p++;if (*p != ',') return -10;
+        p++;}
     else
     {
         ip_start = p;
-
-        while (*p && *p != ',')
-            p++;
-
-        if (*p != ',')
-            return -11;
-
+        while (*p && *p != ',') p++;
+        if (*p != ',') return -11;
         ip_len = (ssize_t)(p - ip_start);
         p++;
     }
 
-    if (ip_len == 0 || ip_len >= sizeof(ip_str))
+    if (ip_len <= 0 || ip_len >= (ssize_t)sizeof(ip_str))
         return -12;
 
-    memcpy(ip_str, ip_start, ip_len);
+    memcpy(ip_str, ip_start, (size_t)ip_len);
     ip_str[ip_len] = '\0';
 
-    /*
-     * inet_pton 得到的是网络字节序。
-     */
     if (inet_pton(AF_INET, ip_str, &info->remote_ip) != 1)
         return -13;
 
     /* remote_port */
-    if (parse_dec_u32(&p, &val) != 0)
+    if (parse_dec_u32(&p, &val) != 0 || val > 65535)
         return -14;
-
-    if (val > 65535)
-        return -15;
-
     info->remote_port = (uint16_t)val;
 
     if (*p != ':')
-        return -16;
+        return -15;
 
     return 0;
 }
 
-// static void esp8266_recv_header_encode(uint8_t raw[ESP8266_RECV_HDR_SIZE],
-//                                        const ESP8266_RecvHeader *hdr)
-// {
-//     raw[0] = ESP8266_RECV_HDR_MAGIC0;
-//     raw[1] = ESP8266_RECV_HDR_MAGIC1;
-//     raw[2] = ESP8266_RECV_HDR_VERSION;
-//     raw[3] = hdr->flags;
-//     raw[4] = hdr->link_id;
-//     raw[5] = 0;
-
-//     raw[6] = (uint8_t)(hdr->data_len >> 8);
-//     raw[7] = (uint8_t)(hdr->data_len & 0xff);
-
-//     /*
-//      * remote_ip 是 inet_pton 写出来的网络字节序原始 4 字节。
-//      * 这里不要用移位拆 uint32_t，否则小端机器会乱。
-//      */
-//     memcpy(&raw[8], &hdr->remote_ip, 4);
-
-//     raw[12] = (uint8_t)(hdr->remote_port >> 8);
-//     raw[13] = (uint8_t)(hdr->remote_port & 0xff);
-// }
-
-
-// static int esp8266_recv_header_decode(const uint8_t raw[ESP8266_RECV_HDR_SIZE],
-//                                       ESP8266_RecvHeader *hdr)
-// {
-//     if (raw[0] != ESP8266_RECV_HDR_MAGIC0 ||
-//         raw[1] != ESP8266_RECV_HDR_MAGIC1)
-//     {
-//         return -1;
-//     }
-
-//     if (raw[2] != ESP8266_RECV_HDR_VERSION)
-//         return -2;
-
-//     memset(hdr, 0, sizeof(ESP8266_RecvHeader));
-
-//     hdr->flags = raw[3];
-//     hdr->link_id = raw[4];
-
-//     hdr->data_len = ((uint16_t)raw[6] << 8) | raw[7];
-
-//     memcpy(&hdr->remote_ip, &raw[8], 4);
-
-//     hdr->remote_port = ((uint16_t)raw[12] << 8) | raw[13];
-
-//     return 0;
-// }
-
-// static int esp8266_queue_send_bytes(QueueHandle_t q,
-//                                     const uint8_t *data,
-//                                     uint16_t len)
-// {
-//     uint16_t i;
-
-//     for (i = 0; i < len; i++)
-//     {
-//         if (xQueueSend(q, &data[i], portMAX_DELAY) != pdTRUE)
-//             return -1;
-//     }
-
-//     return 0;
-// }
-
-
-// static int esp8266_socket_queue_ipd(struct socket_t *psocket,
-//                                     struct UART_Device *puart,
-//                                     const ESP8266_IPD_Info *info)
-// {
-//     QueueHandle_t q;
-//     ESP8266_RecvHeader hdr;
-//     uint8_t raw_hdr[ESP8266_RECV_HDR_SIZE];
-//     uint8_t data;
-//     uint16_t i;
-//     uint32_t need_size;
-
-//     if (psocket == NULL || puart == NULL || info == NULL)
-//         return -1;
-
-//     q = psocket->recv_queue;
-
-//     if (q == NULL)
-//     {
-//         esp8266_uart_discard_bytes(puart, info->data_len);
-//         return -2;
-//     }
-
-//     /*
-//      * recv_queue 是 uint8_t 队列，所以 uxQueueSpacesAvailable 返回的就是剩余字节数。
-//      * 这里提前检查空间，保证不会写半包。
-//      */
-//     need_size = ESP8266_RECV_HDR_SIZE + info->data_len;
-
-//     if ((uint32_t)uxQueueSpacesAvailable(q) < need_size)
-//     {
-//         /*
-//          * 队列空间不够，必须把 UART 里的 payload 读掉，
-//          * 否则后续 AT 解析会错位。
-//          */
-//         esp8266_uart_discard_bytes(puart, info->data_len);
-//         return -3;
-//     }
-
-//     memset(&hdr, 0, sizeof(hdr));
-
-//     hdr.link_id = info->link_id;
-//     hdr.data_len = info->data_len;
-//     hdr.remote_ip = info->remote_ip;
-//     hdr.remote_port = info->remote_port;
-
-//     if (info->has_remote)
-//         hdr.flags |= ESP8266_RECV_FLAG_HAS_REMOTE;
-
-//     esp8266_recv_header_encode(raw_hdr, &hdr);
-
-//     /*
-//      * 先写固定头。
-//      */
-//     if (esp8266_queue_send_bytes(q, raw_hdr, ESP8266_RECV_HDR_SIZE) != 0)
-//     {
-//         esp8266_uart_discard_bytes(puart, info->data_len);
-//         return -4;
-//     }
-
-//     /*
-//      * 再边读 UART，边写 payload 到 socket 队列。
-//      * 不需要 uint8_t data[1460] 这种大数组。
-//      */
-//     for (i = 0; i < info->data_len; i++)
-//     {
-//         esp8266_uart_recv_byte_block(puart, &data);
-
-//         if (xQueueSend(q, &data, portMAX_DELAY) != pdTRUE)
-//             return -5;
-//     }
-
-//     return 0;
-// }
-
-static int esp8266_socket_queue_ipd(struct socket_t *psocket,
-                                    struct UART_Device *puart,
-                                    const ESP8266_IPD_Info *info)
+/* ------------------------------------------------------------------ */
+/*  处理 +IPD 数据包：查找/创建 socket，将数据入队                */
+/* ------------------------------------------------------------------ */
+static void handle_ipd_packet(struct UART_Device *puart,
+                              struct AT_Device   *pdev,
+                              const char         *ipd_start)
 {
-        printf("[IPD] data_len=%d space=%d\r\n", 
-           info->data_len, 
-           (int)uxQueueSpacesAvailable(psocket->recv_queue)); 
-    uint8_t data;
-    uint16_t i;
+    ESP8266_IPD_Info    ipd_info;
+    struct socket_t    *psocket;
+    struct sockaddr_in *sin;
+    int                sockfd;
+    uint8_t             data;
 
-    if (psocket == NULL || puart == NULL || info == NULL)
-        return -1;
+    if (esp8266_parse_ipd_header(ipd_start, &ipd_info) != 0)
+        return;
+		printf("ipd_len %d\r\n", ipd_info.data_len);
+    psocket = get_esp8266_socket_for_hw_socket(ipd_info.link_id);
+    if (psocket == NULL){ /*先默认按TCP*/
+        sockfd = esp8266_socket(AF_INET, SOCK_STREAM, 0);
+        if (sockfd < 0)
+        {
+            esp8266_uart_discard_bytes(puart, ipd_info.data_len);
+            return;
+        }
+        psocket = fd_socket_get(sockfd);
 
-    if (psocket->recv_queue == NULL)
-    {
-        esp8266_uart_discard_bytes(puart, info->data_len);
-        return -2;
+        vTaskSuspendAll();
+        {
+            sin                = (struct sockaddr_in *)&psocket->remote_addr;
+            sin->sin_family      = AF_INET;
+            sin->sin_addr.s_addr = ipd_info.remote_ip;
+            sin->sin_port        = htons(ipd_info.remote_port);
+
+            psocket->hw_socket   = ipd_info.link_id;
+            psocket->open_flag   = 1;
+					  psocket->status			 = SOCKET_USED;
+            psocket->mode        = SOCKET_CLIENT;
+        }
+        xTaskResumeAll();
     }
 
-    /* 空间不足，丢掉整包，防止 UART 数据流错位 */
-    if ((uint32_t)uxQueueSpacesAvailable(psocket->recv_queue) < info->data_len)
+    for (uint16_t i = 0; i < ipd_info.data_len; i++)
     {
-        esp8266_uart_discard_bytes(puart, info->data_len);
-        return -3;
+        if (puart->UART_Recv(puart, &data, portMAX_DELAY) == 0)
+            xQueueSend(psocket->recv_queue, &data, 0);
     }
-
-    /* 原地更新 remote_ip / remote_port，用临界区保护 */
-    if (info->has_remote)
-    {
-        taskENTER_CRITICAL();
-        psocket->remote_addr.sin_family = AF_INET;
-        psocket->remote_addr.sin_addr.s_addr = info->remote_ip;
-        psocket->remote_addr.sin_port = htons(info->remote_port);
-        taskEXIT_CRITICAL();
-    }
-
-    /* 逐字节从 UART 读取写入队列，不带任何帧头 */
-    for (i = 0; i < info->data_len; i++)
-    {
-        esp8266_uart_recv_byte_block(puart, &data);
-        if (xQueueSend(psocket->recv_queue, &data, portMAX_DELAY) != pdTRUE)
-            return -4;
-    }
-
-    return 0;
+    xSemaphoreGive(psocket->recv_lock);
 }
 
+/* ------------------------------------------------------------------ */
+/*  处理 x,CLOSED 被动关闭事件                                          */
+/* ------------------------------------------------------------------ */
+static void handle_closed_event(struct AT_Device *pdev,const char *line)
+{
+    if(1 == pdev->in_cmd)
+        return;
+    const char      *comma   = strchr(line, ',');
+    struct socket_t *psocket;
+    uint8_t          link_id;
+    /* 格式必须是 "x,CLOSED"，x 为0-4 */
+    if (comma == NULL || comma != line + 1 ||
+        line[0] < '0' || line[0] > '4')
+        return;
+
+    link_id = (uint8_t)(line[0] - '0');
+    psocket = get_esp8266_socket_for_hw_socket(link_id);
+    if (psocket == NULL)
+        return;
+    if(0 == psocket->open_flag)
+        return ;
+    vTaskSuspendAll();
+	    printf("handle_closed_event\r\n");
+	    fd_socket_free(psocket->sockfd);
+    psocket->open_flag = 0;
+    psocket->status      = SOCKET_FREE;
+    psocket->sockfd = -1;
+    xTaskResumeAll();
+}
+
+/* ------------------------------------------------------------------ */
+/*  处理普通 AT 响应行                */
+/* ------------------------------------------------------------------ */
+static void handle_at_response(struct AT_Device *pdev,
+                               const char       *line,
+                               uint32_t          content_len)
+{
+    /* 优先匹配更长的字符串，避免 "SEND OK" 被"OK" 先命中 */
+    if (strstr(line, "SEND OK"))
+    {
+        pdev->resp_status = ESP8266_OK;
+        pdev->in_cmd = 0;
+        xSemaphoreGive(pdev->at_resp_sem);
+    }
+    else if (strstr(line, "SEND FAIL"))
+    {
+        pdev->resp_status = ESP8266_ERROR;
+        pdev->in_cmd = 0;
+        xSemaphoreGive(pdev->at_resp_sem);
+    }
+    else if (strstr(line, "OK"))
+    {
+        pdev->resp_status = ESP8266_OK;
+        pdev->in_cmd = 0;
+        xSemaphoreGive(pdev->at_resp_sem);
+    }
+    else if (strstr(line, "ERROR"))
+    {
+        pdev->resp_status = ESP8266_ERROR;
+        pdev->in_cmd = 0;
+        xSemaphoreGive(pdev->at_resp_sem);
+    }
+    else if (pdev->resp_line_counts < ESP8266_RESP_LINE_MAX)
+    {
+        pdev->resp_line_len[pdev->resp_line_counts] = content_len + 1;
+        memcpy(pdev->resp[pdev->resp_line_counts++], line, content_len + 1);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/*  接收主任务                                                           */
+/* ------------------------------------------------------------------ */
 void Start_RECV_Task(void *argument)
 {
-    struct AT_Device *pdev = get_netdev();
-    char recv_buf[ESP8266_RX_BUF_SIZE];
+    struct AT_Device   *pdev  = get_netdev();
     struct UART_Device *puart = Get_UART_Device("stm32_f4_uart2");
-    char *comma;
-    volatile uint32_t line_len = 0;
-    uint8_t ch;
- //   uint8_t link_id;
-    struct socket_t *psocket;
+    char     recv_buf[ESP8266_RX_BUF_SIZE];
+    uint32_t line_len = 0;
+    uint8_t  ch;
+    uint8_t     do_reset;
+    char*ipd_start;
 
-    char *ipd;
-    char *colon;
-//    uint16_t data_len;
-    // char *p;
-    // uint8_t data;
     while (1)
     {
         puart->UART_Recv(puart, &ch, portMAX_DELAY);
-        if (line_len < ESP8266_RX_BUF_SIZE - 1)
+        /* 缓冲区溢出保护 */
+        if (line_len >= ESP8266_RX_BUF_SIZE - 1)
         {
-            recv_buf[line_len] = ch;
-            recv_buf[line_len + 1] = '\0';
+            line_len    = 0;
+            recv_buf[0] = '\0';
+        }
+
+        recv_buf[line_len]     = (char)ch;
+        recv_buf[line_len + 1] = '\0';
+
+        do_reset  = 0;
+        ipd_start = (line_len >= 4) ? strstr(recv_buf, "+IPD,") : NULL;
+
+        if (ipd_start && strchr(ipd_start, ':'))
+        {
+            /*---- 完整 +IPD 头部，处理数据包 ---- */
+            handle_ipd_packet(puart, pdev, ipd_start);
+            do_reset = 1;
+        }
+        else if (line_len > 0 &&
+                 recv_buf[line_len - 1] == '\r' &&
+                 recv_buf[line_len]     == '\n')
+        {
+            /* ---- 行结束：去掉 \r\n 后分发 ---- */
+            uint32_t content_len       = line_len - 1;
+            recv_buf[content_len]      = '\0';
+
+            if (strstr(recv_buf, ",CLOSED"))
+                handle_closed_event(pdev,recv_buf);
+            else
+                handle_at_response(pdev, recv_buf, content_len);
+
+            do_reset = 1;
+        }
+
+        /* 根据标志决定：重置行or 继续累积 */
+        if (do_reset)
+        {
+            line_len    = 0;
+            recv_buf[0] = '\0';
         }
         else
         {
-            /* 缓冲区已满，取出一半移到前面，继续接收   */
-            memcpy(recv_buf, recv_buf + (ESP8266_RX_BUF_SIZE) / 2,
-                   ESP8266_RX_BUF_SIZE - (ESP8266_RX_BUF_SIZE) / 2);
-            line_len = ESP8266_RX_BUF_SIZE - (ESP8266_RX_BUF_SIZE) / 2;
-
-            /*补存当前字符 ch，并手动递增 line_len */
-            recv_buf[line_len] = ch; // 
-            recv_buf[line_len + 1] = '\0';
             line_len++;
-            continue;
         }
-        //+IPD,0,41,192.168.0.152,62385:cmd:led,offcmd:led,oncmd:oled,hello
-        // +IPD,<link_id>,<len>:<data>,                             比如aa+IPD,0,200:1234567890 这样的数据也要解析防止干扰
-        // +IPD,<link_id>,<len>,<remote_ip>,<remote_port>:<data>
-        ipd = (line_len >= 4) ? strstr(recv_buf, "+IPD,") : NULL;
-        if (ipd)
-        {
-            colon = strchr(ipd, ':');
-            if (colon)
-            {
-               ESP8266_IPD_Info ipd_info;
-               int ret;
-
-               ret = esp8266_parse_ipd_header(ipd, &ipd_info);
-
-               if (ret != 0)
-               {
-                   line_len = 0;
-                   recv_buf[0] = '\0';
-                   continue;
-               }
-
-               psocket = get_esp8266_socket_for_hw_socket(ipd_info.link_id);
-
-               if (psocket == NULL)
-               {
-                   /*
-                    * 找不到 socket 也必须丢掉 payload。
-                    */
-                   esp8266_uart_discard_bytes(puart, ipd_info.data_len);
-
-                   line_len = 0;
-                   recv_buf[0] = '\0';
-                   continue;
-               }
-
-               ret = esp8266_socket_queue_ipd(psocket, puart, &ipd_info);
-
-               if (ret == 0)
-               {
-                   if (psocket->recv_lock != NULL)
-                   {
-                       xSemaphoreGive(psocket->recv_lock);
-                   }
-               }
-
-               line_len = 0;
-               recv_buf[0] = '\0';
-               continue;
-                // link_id = (uint8_t)(ipd[5] - '0');
-                // if (link_id > 4)
-                // {
-                //     line_len = 0;
-                //     recv_buf[0] = '\0';
-                //     continue;
-                // }
-                // char *comma2 = strchr(ipd + 5, ',');
-                // if (comma2 == NULL)
-                // {
-                //     line_len = 0;
-                //     recv_buf[0] = '\0';
-                //     continue;
-                // }
-                // p = comma2 + 1;
-                // data_len = 0;
-                // while (*p >= '0' && *p <= '9')
-                // {
-                //     data_len = data_len * 10 + (*p - '0');
-                //     p++;
-                // }
-                // psocket = get_esp8266_socket_for_hw_socket(link_id);
-                // if(psocket == NULL)
-                // {
-                //     esp8266_uart_discard_bytes(puart, data_len);
-                //     // line_len = 0;
-                //     // recv_buf[0] = '\0';
-                //     continue;
-                // }
-                // for (uint16_t i = 0; i < data_len; i++)
-                // {
-                //     if (0 == puart->UART_Recv(puart, &data, portMAX_DELAY))
-                //     {
-                //         xQueueSend(psocket->recv_queue, &data, 0);
-                //     }
-                // }
-                // xSemaphoreGive(psocket->recv_lock);
-                // line_len = 0;
-                // recv_buf[0] = '\0';
-                // continue;
-            }
-            /* 头部未完整，继续接收 */
-        }
-        if (line_len > 0 && recv_buf[line_len - 1] == '\r' && recv_buf[line_len] == '\n')
-        {
-            line_len = line_len - 1;
-            recv_buf[line_len] = '\0';
-            if (strstr(recv_buf, ",CONNECT"))
-            {
-//                link_id = (uint8_t)(recv_buf[0] - '0');
-            }
-            // if (strstr(recv_buf, ",CONNECT"))
-            // {
-            //     comma = strchr(recv_buf, ',');
-            //     if (comma && comma == recv_buf + 1 && recv_buf[0] >= '0' && recv_buf[0] <= '4')
-            //     {
-            //         link_id = recv_buf[0] - '0';
-            //         // if(0 == esp8266_socket_inuse(link_id, SOCKET_STATUS_INUSE))
-            //     }
-            // }
-            else if (strstr(recv_buf, ",CLOSED"))
-            {
-                comma = strchr(recv_buf, ',');
-                if (comma && comma == recv_buf + 1 && recv_buf[0] >= '0' && recv_buf[0] <= '4')
-                {
-//                    link_id = recv_buf[0] - '0';
-                }
-            }
-            else if (strstr(recv_buf, "SEND OK"))//先匹配这个
-            {
-                pdev->resp_status = ESP8266_OK;
-                xSemaphoreGive(pdev->at_resp_sem);
-            }
-            else if (strstr(recv_buf, "SEND FAIL"))
-            {
-                pdev->resp_status = ESP8266_ERROR;
-                xSemaphoreGive(pdev->at_resp_sem);
-            }
-            else if (strstr(recv_buf, "OK"))
-            {
-                /* 发送成功*/
-                pdev->resp_status = ESP8266_OK;
-                xSemaphoreGive(pdev->at_resp_sem);
-            }
-            else if (strstr(recv_buf, "ERROR"))
-            {
-                /* 发送失败*/
-                pdev->resp_status = ESP8266_ERROR;
-                xSemaphoreGive(pdev->at_resp_sem);
-            }
-            else if (pdev->resp_line_counts < ESP8266_RESP_LINE_MAX) /* ← 越界保护 */
-            {
-                pdev->resp_line_len[pdev->resp_line_counts] = line_len + 1;
-                memcpy(pdev->resp[pdev->resp_line_counts++], recv_buf, line_len + 1); // 把一行数据拷贝到缓冲区包括'\0',resp_line_counts++ 表示下一行数据的存放位置
-            }
-
-            line_len = 0;
-            recv_buf[line_len] = '\0';
-            continue;
-        }
-        line_len++;
     }
 }
 
@@ -1063,29 +912,27 @@ int esp8266_socket(int domain, int type, int protocol)
     struct socket_t  *psocket = NULL;
     int               sockfd  = -1;
 
-    /* 参数校验 */
-    if (domain != AF_INET)
-        return -1;
-    if (type != SOCK_STREAM && type != SOCK_DGRAM)
-        return -1;
-
     pdev = get_netdev();
     if (pdev == NULL)
         return -1;
-
+    vTaskSuspendAll();
     psocket = get_esp8266_unuse_fd_socket();
     if (psocket == NULL)
     {
+        xTaskResumeAll();
         return -1;
     }
-    vTaskSuspendAll();
     sockfd = fd_socket_alloc(psocket);
     psocket->open_flag = 1;
-		printf("esp8266_socket psocket->open_flag %d,sockfd %d\r\n",psocket->open_flag,sockfd);
+    psocket->sockfd = sockfd;
+	printf("esp8266_socket psocket->open_flag %d,sockfd %d\r\n",psocket->open_flag,sockfd);
     if (sockfd < 0)
     {
+        psocket->open_flag = 0;
+        psocket->sockfd = -1;
+				printf("esp8266_socket\r\n");
         fd_socket_free(sockfd);
-			  xTaskResumeAll();
+		xTaskResumeAll();
         return -1;
     }
     /* 初始化槽位 */
@@ -1099,6 +946,18 @@ int esp8266_socket(int domain, int type, int protocol)
     return sockfd;
 }
 
+struct socket_t * esp8266_get_socket(int sockfd)
+{
+    struct AT_Device *ptDev = get_netdev();
+    for(int i = 0; i < ESP8266_SOCKET_NUM; i++)
+    {
+        if(ptDev->sockets[i].sockfd == sockfd)
+        {
+            return &(ptDev->sockets[i]);
+        }
+    }
+    return NULL;
+}
 /**
  * @brief关闭套接字，释放本地和硬件资源
  * @note   无论 AT 命令是否成功都会释放本地资源，防止 fd 泄漏；
@@ -1110,109 +969,28 @@ int esp8266_close(int sockfd)
 {
     struct AT_Device   *pdev         = get_netdev();
     struct socket_t    *psocket      = fd_socket_get(sockfd);
-    struct socket_t    *pclient      = NULL;
-    struct sockaddr_in *pAddrTemp    = NULL;
     char                cmd[48]      = {0};
-    uint8_t             discard      = 0;
-    uint16_t            server_port  = 0;
-    int                 i            = 0;
-    int                 client_count = 0;
-    int                 client_fds[ESP8266_SOCKET_NUM];
-
-    /* 初始化客户端 fd 数组 */
-    for (i = 0; i < ESP8266_SOCKET_NUM; i++)
-        client_fds[i] = -1;
-
-    /* ---- 参数校验 ---- */
-    if (sockfd < 0 || sockfd >= FD_SOCKET_TABLE_SIZE)
-        return -1;
-    if (pdev == NULL)
-        return -1;
+	uint8_t discard;
     if (psocket == NULL)
         return -1;
 
-    /* 未打开直接返回成功（与 POSIX 语义一致）*/
-    if (psocket->open_flag != 1)
-    {
-        return 0;
-    }
+    if (psocket->open_flag != 1) return -1;
     xSemaphoreTake(psocket->send_lock, portMAX_DELAY);
     /* ---- 发送 AT 命令关闭硬件连接 ---- */
     if (psocket->hw_socket != 0xFFFFFFFFU)
     {
         memset(cmd, 0, sizeof(cmd));
-
-        if (psocket->mode == SOCKET_SERVER)
-        {
-            /* 服务端：停止整个 TCP Server */
-            snprintf(cmd, sizeof(cmd), "AT+CIPSERVER=0\r\n");
-        }
-        else
-        {
-            /* 客户端：按link_id 关闭单条连接 */
-            snprintf(cmd, sizeof(cmd), "AT+CIPCLOSE=%u\r\n", psocket->hw_socket);
-        }
-
-        /*
-         * 忽略返回值：
-         * 对端已断开时固件返回 ERROR，本地资源必须无条件释放，
-         * 否则 fd 将永久泄漏
-         */
+        /* 客户端：按link_id 关闭单条连接 */
+        snprintf(cmd, sizeof(cmd), "AT+CIPCLOSE=%u\r\n", psocket->hw_socket);
         at_send_cmd(pdev, cmd, NULL, NULL, 0, AT_TIMEOUT);
     }
     xSemaphoreGive(psocket->send_lock);
-    /* ---- 服务端关闭：同步清理属于本服务的所有客户端 socket ---- */
-    if (psocket->mode == SOCKET_SERVER)
-    {
-        pAddrTemp   = (struct sockaddr_in *)&psocket->local_addr;
-        server_port = ntohs(pAddrTemp->sin_port);
-        client_count = 0;
-
-        for (i = 0; i < ESP8266_SOCKET_NUM; i++)
-        {
-            pclient = &pdev->sockets[i];
-            if (pclient == psocket)
-                continue;
-
-            pAddrTemp = (struct sockaddr_in *)&pclient->local_addr;
-
-            if (pclient->open_flag == 1             &&
-                pclient->mode == SOCKET_CLIENT       &&
-                ntohs(pAddrTemp->sin_port) == server_port)
-            {
-                /* 先记录 fd，再重置状态，顺序不能颠倒 */
-                client_fds[client_count] = fd_socket_find(pclient);
-
-                /*
-                 * 锁序约束：server send_lock → client send_lock
-                 * 系统中其他任务不得以相反顺序持锁，否则 ABBA 死锁
-                 */
-                /* 先释放recv完成信号量，防止某个任务在等待这个socket*/
-                xSemaphoreGive(pclient->recv_lock);
-
-                xSemaphoreTake(pclient->send_lock, portMAX_DELAY);
-                /* 清空接收队列（若队列存指针而非字节，需改为释放内存）*/
-                while (xQueueReceive(pclient->recv_queue, &discard, 0) == pdTRUE);
-
-                /* 重置状态字段，信号量和队列句柄不动 */
-                pclient->open_flag   = 0;
-                pclient->hw_socket   = 0xFFFFFFFFU;
-                pclient->mode        = SOCKET_UNKNOWN;
-                pclient->socket_type = SOCK_UNDEF;
-                memset(&pclient->local_addr,  0, sizeof(pclient->local_addr));
-                memset(&pclient->remote_addr, 0, sizeof(pclient->remote_addr));
-                fd_socket_free(client_fds[client_count]);
-                xSemaphoreGive(pclient->send_lock);
-
-                client_count++;
-            }
-        }
-    }
-    xSemaphoreGive(psocket->recv_lock);
-    xSemaphoreTake(psocket->send_lock, portMAX_DELAY);
-    /* ---- 清空本 socket 接收队列 ---- */
+        /* ---- 清空本 socket 接收队列 ---- */
     while (xQueueReceive(psocket->recv_queue, &discard, 0) == pdTRUE);
+    /* 释放接收队列信号量*/
+    xSemaphoreGive(psocket->recv_lock);
 
+    vTaskSuspendAll();
     /* ---- 重置本 socket 状态字段（信号量和队列句柄不动）---- */
     psocket->open_flag   = 0;
     psocket->hw_socket   = 0xFFFFFFFFU;
@@ -1220,23 +998,10 @@ int esp8266_close(int sockfd)
     psocket->socket_type = SOCK_UNDEF;
     memset(&psocket->local_addr,  0, sizeof(psocket->local_addr));
     memset(&psocket->remote_addr, 0, sizeof(psocket->remote_addr));
-
     psocket->status = SOCKET_FREE;
-    xSemaphoreGive(psocket->send_lock);
-
-    vTaskSuspendAll();
+    psocket->sockfd = -1;
+	printf("esp8266_close\r\n");
     fd_socket_free(sockfd);
-    /* 同步释放客户端 fd 和槽位（仅服务端关闭时）*/
-    for (i = 0; i < client_count; i++)
-    {
-        if (client_fds[i] >= 0)
-        {
-            pclient = fd_socket_get(client_fds[i]);
-            if (pclient != NULL)
-                pclient->status = SOCKET_FREE;
-            fd_socket_free(client_fds[i]);
-        }
-    }
     xTaskResumeAll();
     return 0;
 }
@@ -1410,14 +1175,14 @@ int esp8266_listen(int sockfd, int backlog)
         return -1;
     }
 
-    /* 修复：只有 TCP socket 才能 listen */
+    /* 只有 TCP socket 才能 listen */
     if (pSocket->socket_type != SOCK_STREAM)
     {
         xSemaphoreGive(pSocket->send_lock);
         return -1;
     }
 
-    /* 修复：必须先 bind 才能 listen，端口为 0 说明还未 bind */
+    /* 必须先 bind 才能 listen，端口为 0 说明还未 bind */
     if (pSocket->local_addr.sin_port == 0)
     {
         xSemaphoreGive(pSocket->send_lock);
@@ -1459,7 +1224,7 @@ int esp8266_listen(int sockfd, int backlog)
     /* ---- 修复：AT 命令全部成功后，再更新状态 ---- */
     pSocket->hw_socket = ESP8266_SOCKET_SERVER_ID;
     pSocket->mode      = SOCKET_SERVER;
-    pSocket->status    = SOCKET_USED;   /* 修复：原代码缺少这一行 */
+    pSocket->status    = SOCKET_USED;  
 
     xSemaphoreGive(pSocket->send_lock);
     return 0;
@@ -1479,15 +1244,12 @@ int esp8266_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
     if (sockfd < 0 || sockfd >= FD_SOCKET_TABLE_SIZE)     return -1;
     if (addr == NULL)                                      return -1;
     if (addrlen < (socklen_t)sizeof(struct sockaddr_in))   return -1;
-	printf("3 addr->sa_family  %d\r\n",addr->sa_family );
     if (addr->sa_family != AF_INET)                        return -1;
     struct AT_Device *pdev = get_netdev();
     if (pdev == NULL) return -1;
     struct socket_t *pSocket = fd_socket_get(sockfd);
     if (pSocket == NULL) return -1;
-		printf("6 \r\n");
     xSemaphoreTake(pSocket->send_lock, portMAX_DELAY);
-    printf("pSocket->open_flag %d\r\n",pSocket->open_flag);
     /*---- socket 状态检查 ----*/
     if (pSocket->open_flag != 1)
     {
@@ -1497,7 +1259,6 @@ int esp8266_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
     /* 防止重复 connect */
     if (pSocket->mode == SOCKET_CLIENT && pSocket->status == SOCKET_USED)
     {
-				printf("9 SOCKET_USED\r\n");
         xSemaphoreGive(pSocket->send_lock);
         return -1;
     }
@@ -1593,105 +1354,65 @@ int esp8266_connect(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
  * @return 实际存入 conns 的连接条数（>=0）
  *         -1 表示命令失败或无法解析状态行
  */
-int esp8266_get_cipstatus(struct AT_Device *ptDev,cipstatus_t *conns, int *stat)
+int esp8266_get_cipstatus(struct AT_Device *ptDev, cipstatus_t *conns,
+                          int *stat)
 {
-    int i;
     int conn_count = 0;
-    int global_stat = -1;
-    int ret = -1;
 
-    /* 解析时可能用到的所有变量提前声明 */
-    const char *line;
-    int hw_socket;
-    unsigned short remote_port, local_port;
-    int tetype;
-    char type_str[10];
-    char ip_str[32];
-    int parsed;
-    unsigned long ip_bin;       /* inet_pton 需要 uint32_t 或 unsigned long */
-    cipstatus_t *p;
-//	  struct UART_Device *puart =Get_UART_Device("stm32_f4_uart1");
-    /* 参数校验 */
-    if (!conns || !stat)
+    if (!ptDev || !conns || !stat)
         return -1;
 
     *stat = -1;
 
-    do {
-        /* 1. 发送 AT+CIPSTATUS 命令 */
-        if (at_send_cmd(ptDev, "AT+CIPSTATUS\r\n", NULL, NULL, 0, AT_TIMEOUT) != 0) {
-            ptDev->resp_line_counts = 0;
-            ptDev->resp_status = 0;
-            memset(ptDev->resp_line_len, 0, sizeof(ptDev->resp_line_len));
-            break;
-        }
+    /* 1. 发送命令 */
+    if (at_send_cmd(ptDev, "AT+CIPSTATUS\r\n", NULL, NULL, 0, AT_TIMEOUT) != 0)
+        goto cleanup;
 
-        /* 2. 解析第 0 行：STATUS:<state> */
-        if (ptDev->resp_line_counts > 0) {
-            if (sscanf((const char *)ptDev->resp[0], "STATUS:%d", &global_stat) != 1) {
-                break;
-            }
-            *stat = global_stat;
-        } else {
-            break;
-        }
+    /* 2. 解析第 0 行：STATUS:<state> */
+    if (ptDev->resp_line_counts == 0 ||
+        sscanf((const char *)ptDev->resp[0], "STATUS:%d", stat) != 1)
+        goto cleanup;
 
-        /* 3. 逐行解析 +CIPSTATUS: 连接条目，最多 MAX_CONNECTIONS 个 */
-        for (i = 1;
-             i < (int)ptDev->resp_line_counts && i < RESP_ROW_LEN
-             && conn_count < ESP8266_SOCKET_NUM;
-             i++)
-        {
-            line = (const char *)ptDev->resp[i];
-//						puart->UART_Send(puart, ptDev->resp[i], ptDev->resp_line_len[i],1000);
-//					puart->UART_Send(puart, "\r\n", 2,1000);
-            /* 跳过非连接行 */
-            if (strncmp(line, "+CIPSTATUS:", 11) != 0)
-                continue;
-						
-            /* 初始化临时变量 */
-            hw_socket = -1;
-            remote_port = 0;
-            local_port = 0;
-            tetype = 0;
-            memset(type_str, 0, sizeof(type_str));
-            memset(ip_str, 0, sizeof(ip_str));
+    /* 3. 逐行解析 +CIPSTATUS 条目 */
+    for (int i = 1;
+         i < (int)ptDev->resp_line_counts && i < RESP_ROW_LEN && conn_count < ESP8266_SOCKET_NUM;
+         i++)
+    {
+        const char *line = (const char *)ptDev->resp[i];
+						//printf("%s\r\n",line);
+        if (strncmp(line, "+CIPSTATUS:", 11) != 0)
+            continue;
 
-            /* 标准格式：+CIPSTATUS:0,"TCP","192.168.0.10",51403,8080,1 */
-            parsed = sscanf(line,
-                            "+CIPSTATUS:%d,\"%9[^\"]\",\"%31[^\"]\",%hu,%hu,%d",
-                            &hw_socket, type_str, ip_str,
-                            &remote_port, &local_port, &tetype);
-            if (parsed != 6)
-                continue;
+        char type_str[10], ip_str[32];
+        unsigned short remote_port, local_port;
+        int hw_socket, tetype;
 
-            /* 将点分十进制 IP 转为网络字节序 uint32_t */
-            ip_bin = 0;
-            if (inet_pton(AF_INET, ip_str, &ip_bin) != 1)
-                continue;
+        if (sscanf(line,
+                   "+CIPSTATUS:%d,\"%9[^\"]\",\"%31[^\"]\",%hu,%hu,%d",
+                   &hw_socket, type_str, ip_str,
+                   &remote_port, &local_port, &tetype) != 6)
+            continue;
 
-            /* 填充数组当前元素 */
-            p = &conns[conn_count];
-            p->link_id     = hw_socket;
-            p->remote_ip   = (uint32_t)ip_bin;
-            p->remote_port = (uint16_t)remote_port;
-            p->local_port  = (uint16_t)local_port;
-            p->tetype      = tetype;
-            p->type        = (strcmp(type_str, "UDP") == 0) ? SOCK_DGRAM : SOCK_STREAM;
+        uint32_t ip_bin = 0;
+        if (inet_pton(AF_INET, ip_str, &ip_bin) != 1)
+            continue;
 
-            conn_count++;
-        }
+        cipstatus_t *p = &conns[conn_count++];
+        p->link_id = hw_socket;
+        p->remote_ip = ip_bin;
+        p->remote_port = remote_port;
+        p->local_port = local_port;
+        p->tetype = tetype;
+        p->type = (strcmp(type_str, "UDP") == 0) ? SOCK_DGRAM : SOCK_STREAM;
+    }
 
-        ret = conn_count;
-
-    } while (0);
-
-    /* 4. 统一清理 AT 接收缓冲区 */
+cleanup:
     ptDev->resp_line_counts = 0;
     ptDev->resp_status = 0;
     memset(ptDev->resp_line_len, 0, sizeof(ptDev->resp_line_len));
 
-    return ret;
+    /* stat 未成功解析时整体失败 */
+    return (*stat >= 0) ? conn_count : -1;
 }
 
 /**
@@ -1700,48 +1421,14 @@ int esp8266_get_cipstatus(struct AT_Device *ptDev,cipstatus_t *conns, int *stat)
 * @param  cip   CIPSTATUS 解析出的条目
 * @return 1=匹配，0=不匹配
 */
-static int socket_match_cipstatus(struct socket_t *sock, cipstatus_t *cip)
+static int socket_match_cipstatus(const struct socket_t *sock,
+                                  const cipstatus_t     *cip)
 {
-   if (!sock || !cip)
-       return 0;
+    if (!sock || !cip)
+        return 0;
 
-   /* link_id 必须一致 */
-   if (sock->hw_socket != (uint32_t)cip->link_id)
-       return 0;
-
-   /* 远端 IP 必须一致（都是网络字节序） */
-   if (sock->remote_addr.sin_addr.s_addr != cip->remote_ip)
-       return 0;
-
-   /* 远端端口：socket 中已经是网络字节序，cip 中是主机字节序 */
-   if (sock->remote_addr.sin_port != htons(cip->remote_port))
-       return 0;
-
-   /* 本地端口 */
-   if (sock->local_addr.sin_port != htons(cip->local_port))
-       return 0;
-
-   return 1;
-}
-
-static void socket_cleanup(struct AT_Device *ptDev, struct socket_t *sock)
-{
-    if (!sock || sock->status == SOCKET_FREE)
-        return;
-
-    if (sock->open_flag)
-        fd_socket_free((int)sock->sockfd);
-
-    if (sock->recv_queue)
-        xQueueReset(sock->recv_queue);
-
-    sock->open_flag   = 0;
-    sock->status      = SOCKET_FREE;
-    sock->mode        = SOCKET_UNKNOWN;
-    sock->hw_socket   = 0xFFFFFFFFU;
-    sock->socket_type = SOCK_UNDEF;
-    memset(&sock->remote_addr, 0, sizeof(sock->remote_addr));
-    memset(&sock->local_addr, 0, sizeof(sock->local_addr));
+    return (sock->hw_socket                == (uint32_t)cip->link_id)&& (sock->remote_addr.sin_addr.s_addr  == cip->remote_ip)
+        && (sock->remote_addr.sin_port         == htons(cip->remote_port));
 }
 
 /**
@@ -1754,15 +1441,14 @@ static void socket_cleanup(struct AT_Device *ptDev, struct socket_t *sock)
  * @param  addrlen 输入/输出参数（可为 NULL）
  * @return 成功返回新连接的 fd（>= 0），无新连接返回 -1
  */
-int esp8266_accept( int sockfd,
+int esp8266_accept(int sockfd,
                    struct sockaddr *addr, socklen_t *addrlen)
 {
-	struct AT_Device *ptDev = get_netdev();
-     cipstatus_t cur[5];
-     int cur_count;
+    struct AT_Device *ptDev = get_netdev();
+    cipstatus_t cur[5];
+    int cur_count;
     int stat;
-    int i, j;
-    int matched;
+    int  j;
 
     /* 1. 校验 server socket */
     struct socket_t *server = fd_socket_get(sockfd);
@@ -1779,108 +1465,96 @@ int esp8266_accept( int sockfd,
         return -1;
 
     /* ============================================================
-     * 3. 清理断开的连接
+     * 找第一个新连接并返回
      * ============================================================ */
-    for (i = 0; i < ESP8266_SOCKET_NUM; i++) {
-        if (ptDev->sockets[i].status != SOCKET_USED)
-            continue;
-        if (ptDev->sockets[i].mode != SOCKET_CLIENT)
-            continue;
-
-        matched = 0;
-        for (j = 0; j < cur_count; j++) {
-            if (socket_match_cipstatus(&ptDev->sockets[i], &cur[j])) {
-                matched = 1;
-                break;
-            }
-        }
-
-        if (!matched) {
-            /* 推 EOF 通知 recv */
-            if (ptDev->sockets[i].recv_queue) {
-                uint8_t eof = 0;
-                xQueueSend(ptDev->sockets[i].recv_queue, &eof, 0);
-            }
-            socket_cleanup(ptDev, &ptDev->sockets[i]);
-        }
-    }
-
-    /* ============================================================
-     * 4. 找第一个新连接并返回
-     * ============================================================ */
-    for (j = 0; j < cur_count; j++) {
-        /* 只处理 server 接入的连接 */
-        if (cur[j].tetype != 1)
+    for (j = 0; j < cur_count; j++)
+    {
+        /* 只处理 client 的连接 */
+        if (cur[j].tetype == SOCKET_SERVER)
             continue;
 
-        /* 本地端口必须匹配当前 server */
+        /* 本地端口必须匹配当前 server port */
         if (cur[j].local_port != ntohs(server->local_addr.sin_port))
             continue;
 
         /* 检查是否已被跟踪 */
         struct socket_t *existing = get_esp8266_socket_for_hw_socket(cur[j].link_id);
-        if (existing != NULL) {
-            /* link_id 存在且字段匹配，说明是旧连接，跳过 */
+				if (existing != NULL)
+        {
             if (socket_match_cipstatus(existing, &cur[j]))
-                continue;
-            /* 字段不匹配，旧的在第3步已清理，继续当新连接处理 */
-        }
+            {
+                /*
+                 * handle_ipd_packet 可能已抢先创建了这个 socket，
+                 * 但 local_addr没赋值（local_port=0）。
+                 * ✅ Bug2修复：复用该 socket，补全 local_addr 后返回给应用层
+                 */
+                if (existing->local_addr.sin_port == 0)
+                {
+                    vTaskSuspendAll();
+                    existing->local_addr = server->local_addr;
+                    existing->mode= SOCKET_CLIENT;
+                    xTaskResumeAll();
 
+                    if (addr && addrlen && *addrlen >= sizeof(struct sockaddr_in))
+                    {
+                        struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+                        *sin= existing->remote_addr;
+                        *addrlen = sizeof(struct sockaddr_in);
+                    }
+                    return existing->sockfd;
+                }
+
+                /* 已被accept 过，跳过 */
+                continue;
+            }
+
+            /* link_id 被占用但地址不匹配（旧连接残留），跳过 */
+            if (existing->open_flag == 1 && existing->status == SOCKET_USED)
+                continue;
+        }
+        /* 新连接：在临界区内分配 socket */
+        vTaskSuspendAll();
         /* 分配空闲 socket */
         struct socket_t *client = get_esp8266_unuse_fd_socket();
         if (!client)
-            return -1;
-        xSemaphoreTake(client->send_lock, portMAX_DELAY);
-        /* 初始化 client socket */
-        client->status      = SOCKET_USED;
-        client->open_flag   = 1;
-        client->mode        = SOCKET_CLIENT;
-        client->socket_type = cur[j].type;
-        client->hw_socket   = (uint32_t)cur[j].link_id;
-
-        client->remote_addr.sin_family      = AF_INET;
-        client->remote_addr.sin_addr.s_addr = cur[j].remote_ip;
-        client->remote_addr.sin_port        = htons(cur[j].remote_port);
-
-        client->local_addr = server->local_addr;
-        xSemaphoreGive(client->send_lock);
-        /* 创建接收队列和锁 */
-        // if (!client->recv_queue) {
-        //     client->recv_queue = xQueueCreate(ESP8266_SOCKET_RX_QUEUE_SIZE,
-        //                                       sizeof(uint8_t));
-        // }
-        // if (!client->recv_lock) {
-        //     client->recv_lock = xSemaphoreCreateCounting(ESP8266_SOCKET_RX_SEMAPHORE_COUNT, 0);
-        // }
-        // if (!client->send_lock) {
-        //     client->send_lock = xSemaphoreCreateMutex();
-        // }
-        vTaskSuspendAll();
-        /* 分配 fd */
-        int new_fd = fd_socket_alloc(client);
-        if (new_fd < 0) {
-            socket_cleanup(ptDev, client);
+        {
             xTaskResumeAll();
             return -1;
         }
-        client->sockfd = (uint32_t)new_fd;
-        
+        int new_fd = fd_socket_alloc(client);
+        if (new_fd < 0)
+        {
+            xTaskResumeAll();
+            return -1;
+        }
+        client->open_flag = 1;
+        client->sockfd = new_fd;
+        /* 初始化 client socket */
+        client->status = SOCKET_USED;
+        client->mode = SOCKET_CLIENT;
+        client->socket_type = cur[j].type;
+        client->hw_socket = (uint32_t)cur[j].link_id;
+        client->remote_addr.sin_family = AF_INET;
+        client->remote_addr.sin_addr.s_addr = cur[j].remote_ip;
+        client->remote_addr.sin_port = htons(cur[j].remote_port);
+        client->local_addr = server->local_addr;
+        xTaskResumeAll();
         /* 填充调用者的地址结构 */
-        if (addr && addrlen) {
-            if (*addrlen >= sizeof(struct sockaddr_in)) {
+        if (addr && addrlen)
+        {
+            if (*addrlen >= sizeof(struct sockaddr_in))
+            {
                 struct sockaddr_in *sin = (struct sockaddr_in *)addr;
                 memset(sin, 0, sizeof(*sin));
-                sin->sin_family      = AF_INET;
+                sin->sin_family = AF_INET;
                 sin->sin_addr.s_addr = cur[j].remote_ip;
-                sin->sin_port        = htons(cur[j].remote_port);
+                sin->sin_port = htons(cur[j].remote_port);
                 *addrlen = sizeof(struct sockaddr_in);
             }
         }
-    xTaskResumeAll();
         /* 找到一个就返回 */
         return new_fd;
     }
-
     /* 没有新连接 */
     return -1;
 }
@@ -1899,7 +1573,6 @@ int esp8266_accept( int sockfd,
 
 ssize_t esp8266_send(int sockfd, const void *buf, ssize_t len, int flags)
 {
-    printf("[SEND] len=%d\r\n", (int)len); 
     (void)flags;
 
     if (sockfd < 0 || sockfd >= FD_SOCKET_TABLE_SIZE) return -1;
@@ -1920,7 +1593,7 @@ ssize_t esp8266_send(int sockfd, const void *buf, ssize_t len, int flags)
         xSemaphoreGive(psocket->send_lock);
         return -1;
     }
-
+ // printf("[SEND] len=%d\r\n", (int)len); 
     const uint8_t *ptr      = (const uint8_t *)buf;
     ssize_t         remaining = len;
     ssize_t         sent      = 0;
@@ -2115,35 +1788,6 @@ ssize_t esp8266_sendto(int sockfd, const void *buf, ssize_t len, int flags,
     xSemaphoreGive(psocket->send_lock);
     return (ssize_t)sent;
 }
-static int esp8266_queue_recv_header(QueueHandle_t q,
-                                     ESP8266_RecvHeader *hdr,
-                                     TickType_t timeout)
-{
-    uint8_t raw_hdr[ESP8266_RECV_HDR_SIZE];
-    uint16_t i;
-
-    if (q == NULL || hdr == NULL)
-        return -1;
-
-    for (i = 0; i < ESP8266_RECV_HDR_SIZE; i++)
-    {
-        TickType_t wait_time;
-
-        /*
-         * 第一个字节按用户 timeout 等。
-         * 只要开始读头，后面的头字节必须读完整。
-         */
-        wait_time = (i == 0) ? timeout : portMAX_DELAY;
-
-        if (xQueueReceive(q, &raw_hdr[i], wait_time) != pdTRUE)
-            return -2;
-    }
-
-    if (esp8266_recv_header_decode(raw_hdr, hdr) != 0)
-        return -3;
-
-    return 0;
-}
 
 /**
  * @brief 接收数据并获取来源地址（UDP）
@@ -2155,7 +1799,7 @@ static int esp8266_queue_recv_header(QueueHandle_t q,
  * @param addrlen  [out] 来源地址长度，可为 NULL
  * @return 成功返回实际接收字节数，失败返回 -1
  */
-ssize_t esp8266_recvfrom(int sockfd,void *buf,
+ssize_t esp8266_recvfrom(int sockfd, void *buf,
                          ssize_t len,
                          int flags,
                          struct sockaddr *src_addr,
@@ -2173,11 +1817,11 @@ ssize_t esp8266_recvfrom(int sockfd,void *buf,
 
     if (psocket == NULL || psocket->recv_queue == NULL)
         return -1;
-		
+
     /* 先非阻塞尝试读取，队列里有残留数据直接拿走 */
     for (i = 0; i < len; i++)
     {
-        if (xQueueReceive(psocket->recv_queue, &pbuf[i], 0) != pdTRUE)
+        if (pdPASS != xQueueReceive(psocket->recv_queue, &pbuf[i], 0))
             break;
     }
 
@@ -2186,45 +1830,34 @@ ssize_t esp8266_recvfrom(int sockfd,void *buf,
     {
         timeout = psocket->recv_timeout;
 
-        while (xSemaphoreTake(psocket->recv_lock, pdMS_TO_TICKS(10)) != pdTRUE)
+        while (pdPASS != xSemaphoreTake(psocket->recv_lock, pdMS_TO_TICKS(10)))
         {
             if (timeout > 10)
                 timeout -= 10;
             else
                 break;
         }
-
-        /* 等到信号量或超时后再读一次 */
-        for (; i < len; i++)
+    }
+            /* 等到信号量或超时后再读一次 */
+    for (; i < len; i++)
+    {
+        if (pdPASS != xQueueReceive(psocket->recv_queue, &pbuf[i], 0))
+            break;
+    }
+    /* 读到数据才填充来源地址 */
+    if (i > 0)
+    {
+        if (src_addr != NULL && addrlen != NULL)
         {
-            if (xQueueReceive(psocket->recv_queue, &pbuf[i], 0) != pdTRUE)
-                break;
+            struct sockaddr_in tmp;
+            tmp = psocket->remote_addr;
+            memcpy(src_addr, &tmp, sizeof(struct sockaddr_in));
+            *addrlen = sizeof(struct sockaddr_in);
         }
     }
-
-    /* 读到数据才填充来源地址 */
-    // if (i > 0)
-    // {
-    //     if (src_addr != NULL && addrlen != NULL)
-    //     {
-    //         struct sockaddr_in tmp;
-
-    //         // taskENTER_CRITICAL();
-    //         // tmp = psocket->remote_addr;
-    //         // taskEXIT_CRITICAL();
-
-    //         memcpy(src_addr, &tmp, sizeof(struct sockaddr_in));
-    //         *addrlen = sizeof(struct sockaddr_in);
-    //     }
-    // }
-		if(i == 0)
-		{
-			return 0;
-		}
-
+    
     return i;
 }
-
 
 //ssize_t esp8266_recvfrom(int sockfd, void *buf, ssize_t len, int flags,
 //                         struct sockaddr *src_addr, socklen_t *addrlen)
